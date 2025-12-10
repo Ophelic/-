@@ -1,0 +1,609 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ZenParticles 3D | Interactive Hand-Controlled Art</title>
+    
+    <!-- SEO -->
+    <meta name="description" content="Experience real-time 3D particle art controlled by your hand gestures.">
+    <meta property="og:title" content="ZenParticles 3D">
+    <meta property="og:description" content="Control 8,000 particles with your hands using AI.">
+
+    <!-- Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    
+    <!-- Fonts -->
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600&display=swap" rel="stylesheet">
+
+    <!-- Import Map: Defines where to load libraries from -->
+    <script type="importmap">
+{
+  "imports": {
+    "react": "https://esm.sh/react@18.2.0",
+    "react-dom/client": "https://esm.sh/react-dom@18.2.0/client",
+    "three": "https://esm.sh/three@0.160.0",
+    "@react-three/fiber": "https://esm.sh/@react-three/fiber@8.15.14?external=react,react-dom,three",
+    "@react-three/drei": "https://esm.sh/@react-three/drei@9.96.1?external=react,react-dom,three,@react-three/fiber",
+    "@mediapipe/tasks-vision": "https://esm.sh/@mediapipe/tasks-vision@0.10.9",
+    "uuid": "https://esm.sh/uuid@9.0.1",
+    "react-dom/": "https://aistudiocdn.com/react-dom@^19.2.1/",
+    "react/": "https://aistudiocdn.com/react@^19.2.1/",
+    "vite": "https://aistudiocdn.com/vite@^7.2.7",
+    "@vitejs/plugin-react": "https://aistudiocdn.com/@vitejs/plugin-react@^5.1.2"
+  }
+}
+</script>
+
+    <!-- Babel for in-browser JSX compilation -->
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+
+    <style>
+      body { margin: 0; background-color: #000; font-family: 'Inter', sans-serif; overflow: hidden; }
+      canvas { touch-action: none; }
+      /* Hide scrollbars */
+      ::-webkit-scrollbar { width: 0px; background: transparent; }
+    </style>
+<link rel="stylesheet" href="/index.css">
+</head>
+<body>
+    <div id="root"></div>
+
+    <!-- MAIN APPLICATION CODE -->
+    <script type="text/babel" data-type="module">
+        import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
+        import { createRoot } from 'react-dom/client';
+        import * as THREE from 'three';
+        import { Canvas, useFrame } from '@react-three/fiber';
+        import { OrbitControls, Stars } from '@react-three/drei';
+        import { FilesetResolver, HandLandmarker } from '@mediapipe/tasks-vision';
+
+        // --- CONSTANTS & TYPES ---
+        const PARTICLE_COUNT = 8000;
+        
+        const ShapeType = {
+            HEART: 'Heart',
+            FLOWER: 'Flower',
+            SATURN: 'Saturn',
+            ZEN: 'Zen',
+            FIREWORKS: 'Fireworks',
+            SPHERE: 'Sphere',
+            LIGUGU: 'Ligugu'
+        };
+
+        const Colors = [
+            '#ffffff', '#ff4d4d', '#4da6ff', '#ffcc00', '#cc33ff', '#33ff99', '#ff9933'
+        ];
+
+        // --- SERVICE: SHAPE GENERATION ---
+        
+        const randomInSphere = (radius) => {
+            const u = Math.random();
+            const v = Math.random();
+            const theta = 2 * Math.PI * u;
+            const phi = Math.acos(2 * v - 1);
+            const r = Math.cbrt(Math.random()) * radius;
+            return new THREE.Vector3(
+                r * Math.sin(phi) * Math.cos(theta),
+                r * Math.sin(phi) * Math.sin(theta),
+                r * Math.cos(phi)
+            );
+        };
+
+        const generateTextPositions = (text) => {
+            const positions = new Float32Array(PARTICLE_COUNT * 3);
+            const canvas = document.createElement('canvas');
+            const ctx = canvas.getContext('2d');
+            const width = 200;
+            const height = 100;
+            canvas.width = width;
+            canvas.height = height;
+
+            if (ctx) {
+                ctx.fillStyle = '#000000';
+                ctx.fillRect(0, 0, width, height);
+                ctx.fillStyle = '#ffffff';
+                ctx.font = 'bold 50px Arial';
+                ctx.textAlign = 'center';
+                ctx.textBaseline = 'middle';
+                ctx.fillText(text, width / 2, height / 2);
+
+                const imageData = ctx.getImageData(0, 0, width, height);
+                const data = imageData.data;
+                const validPixels = [];
+
+                for (let y = 0; y < height; y++) {
+                    for (let x = 0; x < width; x++) {
+                        if (data[(y * width + x) * 4] > 128) {
+                            validPixels.push(x, y);
+                        }
+                    }
+                }
+
+                for (let i = 0; i < PARTICLE_COUNT; i++) {
+                    let x, y, z;
+                    const idx = i * 3;
+                    if (validPixels.length > 0) {
+                        const pixelIndex = Math.floor(Math.random() * (validPixels.length / 2)) * 2;
+                        const px = validPixels[pixelIndex];
+                        const py = validPixels[pixelIndex + 1];
+                        x = (px - width / 2) * 0.1;
+                        y = -(py - height / 2) * 0.1;
+                        z = (Math.random() - 0.5) * 0.5;
+                    } else {
+                        const p = randomInSphere(1);
+                        x = p.x; y = p.y; z = p.z;
+                    }
+                    positions[idx] = x;
+                    positions[idx+1] = y;
+                    positions[idx+2] = z;
+                }
+            }
+            return positions;
+        };
+
+        const generateShapePositions = (shape) => {
+            const positions = new Float32Array(PARTICLE_COUNT * 3);
+            
+            if (shape === ShapeType.LIGUGU) {
+                return generateTextPositions("Ligugu");
+            }
+
+            for (let i = 0; i < PARTICLE_COUNT; i++) {
+                let x = 0, y = 0, z = 0;
+                const idx = i * 3;
+
+                switch (shape) {
+                    case ShapeType.HEART: {
+                        const t = Math.random() * Math.PI * 2;
+                        const zVar = (Math.random() - 0.5) * 5; 
+                        const hx = 16 * Math.pow(Math.sin(t), 3);
+                        const hy = 13 * Math.cos(t) - 5 * Math.cos(2 * t) - 2 * Math.cos(3 * t) - Math.cos(4 * t);
+                        x = hx * 0.25;
+                        y = hy * 0.25;
+                        z = zVar * (1 - Math.abs(hy)/20);
+                        break;
+                    }
+                    case ShapeType.SATURN: {
+                        const isRing = Math.random() > 0.6;
+                        if (isRing) {
+                            const innerR = 4, outerR = 8;
+                            const theta = Math.random() * Math.PI * 2;
+                            const radius = innerR + Math.random() * (outerR - innerR);
+                            x = radius * Math.cos(theta);
+                            z = radius * Math.sin(theta);
+                            y = (Math.random() - 0.5) * 0.2;
+                        } else {
+                            const p = randomInSphere(2.5);
+                            x = p.x; y = p.y; z = p.z;
+                        }
+                        const tilt = Math.PI / 6;
+                        const cosT = Math.cos(tilt), sinT = Math.sin(tilt);
+                        const newX = x * cosT - y * sinT;
+                        const newY = x * sinT + y * cosT;
+                        x = newX; y = newY;
+                        break;
+                    }
+                    case ShapeType.FLOWER: {
+                        const k = 4;
+                        const theta = Math.random() * Math.PI * 2;
+                        const phi = (Math.random() - 0.5) * Math.PI;
+                        const r = (3 * Math.abs(Math.cos(k * theta)) + 1);
+                        x = r * Math.cos(theta) * Math.cos(phi) * 0.8;
+                        y = r * Math.sin(theta) * Math.cos(phi) * 0.8;
+                        z = 2 * Math.sin(phi);
+                        break;
+                    }
+                    case ShapeType.ZEN: {
+                        const part = Math.random();
+                        if (part < 0.2) { 
+                            const p = randomInSphere(0.8); x = p.x; y = p.y + 2.5; z = p.z;
+                        } else if (part < 0.6) {
+                            const p = randomInSphere(1.8); x = p.x * 1.2; y = p.y * 1.4; z = p.z * 0.8;
+                        } else {
+                            const theta = Math.random() * Math.PI * 2;
+                            const rad = 2 + Math.random();
+                            x = rad * Math.cos(theta);
+                            y = -2 + (Math.random() * 0.5);
+                            z = rad * Math.sin(theta) * 0.6;
+                        }
+                        break;
+                    }
+                    case ShapeType.FIREWORKS: {
+                        const p = randomInSphere(1);
+                        const distance = 0.2 + Math.random() * 6;
+                        x = p.x * distance; y = p.y * distance; z = p.z * distance;
+                        break;
+                    }
+                    default: { // SPHERE
+                        const p = randomInSphere(4);
+                        x = p.x; y = p.y; z = p.z;
+                        break;
+                    }
+                }
+                positions[idx] = x;
+                positions[idx+1] = y;
+                positions[idx+2] = z;
+            }
+            return positions;
+        };
+
+        // --- COMPONENT: PARTICLES ---
+
+        const Particles = ({ shape, color, handOpenness, isHandDetected }) => {
+            const pointsRef = useRef(null);
+            const targetPositions = useMemo(() => generateShapePositions(shape), [shape]);
+            
+            const morphTargetPositions = useMemo(() => {
+                if (shape === ShapeType.LIGUGU) return generateTextPositions("miss u");
+                return null;
+            }, [shape]);
+            
+            const currentPositions = useMemo(() => new Float32Array(PARTICLE_COUNT * 3), []);
+            
+            // Initial set
+            useEffect(() => {
+                currentPositions.set(targetPositions);
+            }, []);
+
+            useFrame((state) => {
+                if (!pointsRef.current) return;
+                const positions = pointsRef.current.geometry.attributes.position.array;
+                
+                // Optimized smooth factor
+                const lerpFactor = 0.15;
+                const time = state.clock.getElapsedTime();
+                const breathe = Math.sin(time) * 0.1 + 1; 
+
+                let expansion = isHandDetected ? 1 + handOpenness * 2.0 : breathe;
+                let noiseAmp = isHandDetected ? handOpenness * 0.3 : 0;
+
+                for (let i = 0; i < PARTICLE_COUNT; i++) {
+                    const idx = i * 3;
+                    let tx, ty, tz;
+
+                    if (shape === ShapeType.LIGUGU && morphTargetPositions && isHandDetected) {
+                        const t1x = targetPositions[idx];
+                        const t1y = targetPositions[idx + 1];
+                        const t1z = targetPositions[idx + 2];
+                        const t2x = morphTargetPositions[idx];
+                        const t2y = morphTargetPositions[idx + 1];
+                        const t2z = morphTargetPositions[idx + 2];
+
+                        tx = t1x + (t2x - t1x) * handOpenness;
+                        ty = t1y + (t2y - t1y) * handOpenness;
+                        tz = t1z + (t2z - t1z) * handOpenness;
+                        expansion = 1.0; 
+                        noiseAmp = handOpenness * 0.1;
+                    } else {
+                        tx = targetPositions[idx];
+                        ty = targetPositions[idx + 1];
+                        tz = targetPositions[idx + 2];
+                    }
+                    
+                    const tX = tx * expansion;
+                    const tY = ty * expansion;
+                    const tZ = tz * expansion;
+                    
+                    positions[idx] += (tX + (Math.random()-0.5)*noiseAmp - positions[idx]) * lerpFactor;
+                    positions[idx+1] += (tY + (Math.random()-0.5)*noiseAmp - positions[idx+1]) * lerpFactor;
+                    positions[idx+2] += (tZ + (Math.random()-0.5)*noiseAmp - positions[idx+2]) * lerpFactor;
+                }
+
+                pointsRef.current.geometry.attributes.position.needsUpdate = true;
+                pointsRef.current.rotation.y += 0.001 + (isHandDetected ? handOpenness * 0.01 : 0);
+            });
+
+            return (
+                <points ref={pointsRef}>
+                    <bufferGeometry>
+                        <bufferAttribute
+                            attach="attributes-position"
+                            count={PARTICLE_COUNT}
+                            array={currentPositions}
+                            itemSize={3}
+                        />
+                    </bufferGeometry>
+                    <pointsMaterial
+                        size={0.06}
+                        color={color}
+                        sizeAttenuation={true}
+                        depthWrite={false}
+                        blending={THREE.AdditiveBlending}
+                        transparent={true}
+                        opacity={0.8}
+                    />
+                </points>
+            );
+        };
+
+        // --- COMPONENT: VISION CONTROLLER ---
+
+        const VisionController = ({ onHandUpdate }) => {
+            const videoRef = useRef(null);
+            const [loading, setLoading] = useState(true);
+            const [errorMsg, setErrorMsg] = useState(null);
+            const lastVideoTime = useRef(-1);
+            const requestRef = useRef(null);
+            const handLandmarkerRef = useRef(null);
+            const isLoopRunning = useRef(false);
+
+            useEffect(() => {
+                let active = true;
+                let loadTimeout;
+
+                const initMediaPipe = async () => {
+                    try {
+                        // Set a timeout to warn the user if network is too slow
+                        loadTimeout = setTimeout(() => {
+                            if (active && loading) {
+                                setErrorMsg("Network slow. Still loading AI...");
+                            }
+                        }, 5000);
+
+                        // Use JSDelivr for the WASM files (generally faster/accessible globally)
+                        const vision = await FilesetResolver.forVisionTasks(
+                            "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.9/wasm"
+                        );
+                        
+                        if (!active) return;
+
+                        // Try to load model from Google storage (standard). 
+                        // If this fails, we catch it.
+                        const landmarker = await HandLandmarker.createFromOptions(vision, {
+                            baseOptions: {
+                                modelAssetPath: `https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task`,
+                                delegate: "GPU"
+                            },
+                            runningMode: "VIDEO",
+                            numHands: 2
+                        });
+                        
+                        if (active) {
+                            clearTimeout(loadTimeout);
+                            handLandmarkerRef.current = landmarker;
+                            setLoading(false);
+                            setErrorMsg(null);
+                            if (!isLoopRunning.current && videoRef.current && videoRef.current.readyState >= 2) {
+                                predictWebcam();
+                            }
+                        }
+                    } catch (error) { 
+                        console.error(error);
+                        if (active) {
+                            clearTimeout(loadTimeout);
+                            // Detect if it's likely a network block
+                            if (error.message && (error.message.includes('Failed to fetch') || error.message.includes('NetworkError'))) {
+                                setErrorMsg("Network Error: Cannot load AI model. VPN might be required.");
+                            } else {
+                                setErrorMsg("AI Init Failed: " + error.message);
+                            }
+                        }
+                    }
+                };
+
+                const startWebcam = async () => {
+                    try {
+                        const stream = await navigator.mediaDevices.getUserMedia({ video: { width: 640, height: 480 } });
+                        if (active && videoRef.current) {
+                            videoRef.current.srcObject = stream;
+                            videoRef.current.addEventListener('loadeddata', () => {
+                                if (!isLoopRunning.current) predictWebcam();
+                            });
+                        }
+                    } catch (err) {
+                        console.error(err);
+                        if (active) setErrorMsg("Camera Permission Denied");
+                    }
+                };
+
+                startWebcam();
+                initMediaPipe();
+
+                return () => { 
+                    active = false; 
+                    clearTimeout(loadTimeout);
+                    cancelAnimationFrame(requestRef.current); 
+                };
+            }, []);
+
+            const predictWebcam = () => {
+                isLoopRunning.current = true;
+                if (videoRef.current && handLandmarkerRef.current && !videoRef.current.paused && !videoRef.current.ended) {
+                    if (videoRef.current.currentTime !== lastVideoTime.current) {
+                        lastVideoTime.current = videoRef.current.currentTime;
+                        try {
+                            const results = handLandmarkerRef.current.detectForVideo(videoRef.current, performance.now());
+                            
+                            if (results.landmarks && results.landmarks.length > 0) {
+                                let totalDist = 0;
+                                let count = 0;
+                                for (const landmarks of results.landmarks) {
+                                    const wrist = landmarks[0];
+                                    const tips = [4, 8, 12, 16, 20];
+                                    tips.forEach(tipIdx => {
+                                        const tip = landmarks[tipIdx];
+                                        const dist = Math.sqrt(Math.pow(tip.x - wrist.x, 2) + Math.pow(tip.y - wrist.y, 2));
+                                        totalDist += dist;
+                                        count++;
+                                    });
+                                }
+                                let openness = (totalDist / count - 0.15) / (0.4 - 0.15);
+                                onHandUpdate(Math.max(0, Math.min(1, openness)), true);
+                            } else {
+                                onHandUpdate(0, false);
+                            }
+                        } catch (e) {
+                            console.warn("Prediction error", e);
+                        }
+                    }
+                }
+                requestRef.current = requestAnimationFrame(predictWebcam);
+            };
+
+            return (
+                <div className="fixed bottom-4 right-4 z-50 pointer-events-none opacity-80 overflow-hidden rounded-xl border border-white/20 shadow-2xl w-40 h-32 bg-black/50 backdrop-blur-md">
+                    <video ref={videoRef} autoPlay playsInline muted className="w-full h-full object-cover transform scale-x-[-1]" />
+                    {loading && (
+                        <div className="absolute inset-0 flex flex-col items-center justify-center text-xs text-white bg-black/80 p-2 text-center">
+                            {errorMsg ? (
+                                <span className="text-red-400 font-bold">{errorMsg}</span>
+                            ) : (
+                                <span className="animate-pulse">Loading AI Model...</span>
+                            )}
+                        </div>
+                    )}
+                    {!loading && errorMsg && (
+                         <div className="absolute inset-0 flex items-center justify-center text-xs text-red-400 bg-black/80 p-2 text-center">
+                            {errorMsg}
+                         </div>
+                    )}
+                </div>
+            );
+        };
+
+        // --- COMPONENT: UI OVERLAY ---
+
+        const UIOverlay = ({ currentShape, setShape, currentColor, setColor, isHandDetected, handOpenness }) => {
+            const [minimized, setMinimized] = useState(false);
+            const [started, setStarted] = useState(false);
+            const [copied, setCopied] = useState(false);
+
+            const handleShare = () => {
+                navigator.clipboard.writeText(window.location.href);
+                setCopied(true);
+                setTimeout(() => setCopied(false), 2000);
+            };
+
+            const toggleFullscreen = () => {
+                if (!document.fullscreenElement) document.documentElement.requestFullscreen();
+                else if (document.exitFullscreen) document.exitFullscreen();
+            };
+
+            if (!started) {
+                return (
+                    <div className="fixed inset-0 z-[100] flex flex-col items-center justify-center bg-black/90 backdrop-blur-md text-white">
+                        <h1 className="text-6xl font-bold mb-4 bg-clip-text text-transparent bg-gradient-to-r from-blue-400 to-purple-600">ZenParticles</h1>
+                        <p className="text-xl text-gray-300 mb-8 max-w-md text-center">Interactive 3D art controlled by your hands.</p>
+                        <button onClick={() => { setStarted(true); toggleFullscreen(); }} className="px-8 py-4 bg-white text-black rounded-full font-bold hover:scale-105 transition-transform">
+                            Start Experience
+                        </button>
+                    </div>
+                );
+            }
+
+            return (
+                <>
+                    <div className="absolute top-4 right-4 z-50 flex gap-2">
+                         {/* Share Toast */}
+                        <div className={`transition-all duration-300 ${copied ? 'opacity-100 translate-y-0' : 'opacity-0 -translate-y-2 pointer-events-none'} bg-white text-black px-3 py-1 rounded text-sm font-medium`}>
+                            Link Copied!
+                        </div>
+                        <button onClick={handleShare} className="p-2 rounded-full bg-white/10 hover:bg-white/20 text-white transition-colors" title="Copy Link">
+                            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M4 12v8a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-8"/><polyline points="16 6 12 2 8 6"/><line x1="12" y1="2" x2="12" y2="15"/></svg>
+                        </button>
+                        <button onClick={toggleFullscreen} className="p-2 rounded-full bg-white/10 hover:bg-white/20 text-white transition-colors">
+                            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M8 3H5a2 2 0 0 0-2 2v3m18 0V5a2 2 0 0 0-2-2h-3m0 18h3a2 2 0 0 0 2-2v-3M3 16v3a2 2 0 0 0 2 2h3"/></svg>
+                        </button>
+                    </div>
+
+                    <div className="absolute top-0 left-0 p-6 z-40 max-w-sm w-full">
+                        <div className={`transition-all duration-500 bg-black/40 backdrop-blur-xl border border-white/10 rounded-2xl p-6 shadow-2xl ${minimized ? 'opacity-50' : 'opacity-100'}`}>
+                            <div className="flex justify-between items-center mb-6">
+                                <div>
+                                    <h1 className="text-2xl font-bold bg-clip-text text-transparent bg-gradient-to-r from-blue-400 to-purple-400">ZenParticles</h1>
+                                    <p className="text-xs text-gray-400 mt-1">AI Hand Gesture Control</p>
+                                </div>
+                                <button onClick={() => setMinimized(!minimized)} className="text-gray-400 hover:text-white transition-colors">{minimized ? '+' : '-'}</button>
+                            </div>
+
+                            {!minimized && (
+                                <div className="space-y-6">
+                                    <div className="flex items-center gap-3 p-3 rounded-lg bg-white/5 border border-white/5">
+                                        <div className={`w-3 h-3 rounded-full ${isHandDetected ? 'bg-green-500 animate-pulse' : 'bg-red-500'}`} />
+                                        <div className="flex-1">
+                                            <div className="text-sm font-medium text-white">{isHandDetected ? 'Hand Detected' : 'No Hand Detected'}</div>
+                                            {isHandDetected && (
+                                                <div className="w-full bg-gray-700 h-1.5 mt-2 rounded-full overflow-hidden">
+                                                    <div className="bg-blue-500 h-full transition-all duration-100" style={{ width: `${handOpenness * 100}%` }} />
+                                                </div>
+                                            )}
+                                        </div>
+                                    </div>
+
+                                    <div>
+                                        <label className="text-xs font-semibold text-gray-400 uppercase tracking-wider mb-3 block">Model</label>
+                                        <div className="grid grid-cols-2 gap-2">
+                                            {Object.values(ShapeType).map((shape) => (
+                                                <button key={shape} onClick={() => setShape(shape)} className={`px-4 py-2.5 rounded-lg text-sm font-medium transition-all duration-200 border ${currentShape === shape ? 'bg-blue-600/20 border-blue-500/50 text-blue-100' : 'bg-white/5 border-white/5 text-gray-400 hover:bg-white/10'}`}>
+                                                    {shape}
+                                                </button>
+                                            ))}
+                                        </div>
+                                    </div>
+
+                                    <div>
+                                        <label className="text-xs font-semibold text-gray-400 uppercase tracking-wider mb-3 block">Particle Color</label>
+                                        <div className="flex flex-wrap gap-2">
+                                            {Colors.map((c) => (
+                                                <button key={c} onClick={() => setColor(c)} className={`w-8 h-8 rounded-full border-2 transition-transform duration-200 hover:scale-110 ${currentColor === c ? 'border-white scale-110 shadow-lg' : 'border-transparent'}`} style={{ backgroundColor: c }} />
+                                            ))}
+                                        </div>
+                                    </div>
+                                    
+                                    <div className="text-xs text-gray-500 border-t border-white/10 pt-4 mt-2">
+                                       <p>1. Allow Camera Access</p>
+                                       <p>2. Show Hand to Camera</p>
+                                       <p>3. <span className="text-blue-300">Open Hand</span>: Expand/Morph</p>
+                                       <p>4. <span className="text-blue-300">Fist</span>: Contract</p>
+                                    </div>
+                                </div>
+                            )}
+                        </div>
+                    </div>
+                </>
+            );
+        };
+
+        // --- APP ROOT ---
+
+        const App = () => {
+            const [currentShape, setShape] = useState(ShapeType.HEART);
+            const [particleColor, setColor] = useState('#4da6ff');
+            const [handOpenness, setHandOpenness] = useState(0);
+            const [isHandDetected, setIsHandDetected] = useState(false);
+
+            const handleHandUpdate = (openness, detected) => {
+                setHandOpenness(openness);
+                setIsHandDetected(detected);
+            };
+
+            return (
+                <div className="relative w-screen h-screen overflow-hidden bg-black">
+                    <div className="absolute inset-0 bg-gradient-to-b from-gray-900 via-black to-gray-900">
+                        <Canvas camera={{ position: [0, 0, 10], fov: 60 }}>
+                            <OrbitControls enableZoom={false} enablePan={false} maxPolarAngle={Math.PI / 1.5} minPolarAngle={Math.PI / 3} />
+                            <ambientLight intensity={0.5} />
+                            <Stars radius={100} depth={50} count={5000} factor={4} saturation={0} fade speed={1} />
+                            <Particles shape={currentShape} color={particleColor} handOpenness={handOpenness} isHandDetected={isHandDetected} />
+                        </Canvas>
+                    </div>
+                    <UIOverlay 
+                        currentShape={currentShape} 
+                        setShape={setShape} 
+                        currentColor={particleColor} 
+                        setColor={setColor} 
+                        isHandDetected={isHandDetected} 
+                        handOpenness={handOpenness} 
+                    />
+                    <VisionController onHandUpdate={handleHandUpdate} />
+                </div>
+            );
+        };
+
+        const root = createRoot(document.getElementById('root'));
+        root.render(<App />);
+    </script>
+<script type="module" src="/index.tsx"></script>
+</body>
+</html>
